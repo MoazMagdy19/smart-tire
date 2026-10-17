@@ -1,0 +1,895 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>[hidden]{display:none!important}</style>
+<title>Smart Tire Cooling System</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=Cairo:wght@600;700&display=swap">
+<style>
+/* Layout: control-room dashboard. Controls and demo sequence on top, then
+   [temperature + status | tire stage | LEDs + sensor panel], hardware flow,
+   event log + results, explanation and disclaimer. Committed dark look. */
+:root {
+  --bg: #0b0f13;
+  --panel: #131920;
+  --panel-2: #19212a;
+  --line: #27313b;
+  --fg: #e8edf2;
+  --muted: #8d9aa7;
+  --safe: #34e0a1;
+  --heat: #ffa31a;
+  --warn: #ff4538;
+  --cool: #2cc8ff;
+  --font-display: 'Barlow Condensed', 'Cairo', 'Arial Narrow', Impact, sans-serif;
+  --font-body: 'IBM Plex Sans', 'IBM Plex Sans Arabic', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'IBM Plex Sans Arabic', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 15px/1.55 var(--font-body);
+  padding-block: 24px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
+h1, h2, h3, p { margin: 0; }
+h1, h2 { text-wrap: balance; }
+button { font-family: inherit; }
+:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; min-width: 0; }
+.lbl { font: 500 .72rem/1.2 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+
+/* Header */
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; padding-bottom: 8px; }
+.top > div { min-width: 0; }
+.eyebrow { font: 500 .75rem var(--font-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--heat); }
+h1 { font: 700 clamp(2.2rem, 5.4vw, 3.8rem)/1 var(--font-display); letter-spacing: .02em; text-transform: uppercase; margin-top: 6px; }
+.tagline { color: var(--muted); font-size: 1.05rem; margin-top: 8px; max-width: 60ch; }
+.simchip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font: 500 .75rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.simchip i { width: 8px; height: 8px; border-radius: 50%; background: var(--heat); animation: blink 1.6s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+
+/* Controls */
+.controls { display: grid; gap: 16px; }
+.btns { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.btn { font-weight: 600; font-size: 1rem; padding: .85rem 1.3rem; min-height: 48px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; transition: filter .15s, background .15s, opacity .15s; }
+.btn.primary { background: var(--cool); border-color: var(--cool); color: #04202b; font-size: 1.15rem; padding: 1rem 1.7rem; }
+.btn.heat { color: var(--heat); border-color: var(--heat); }
+.btn.ghost { color: var(--muted); }
+.btn:hover:not(:disabled) { filter: brightness(1.15); }
+.btn.heat:hover:not(:disabled) { background: color-mix(in srgb, var(--heat) 14%, transparent); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; counter-reset: s; }
+.steps li { counter-increment: s; border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; display: grid; gap: 2px; color: var(--muted); transition: border-color .3s, background .3s, color .3s; min-width: 0; }
+.steps li::before { content: counter(s); font: 500 .72rem var(--font-mono); letter-spacing: .1em; }
+.steps b { font-weight: 600; font-size: .92rem; color: inherit; }
+.steps span { font-size: .78rem; }
+.steps li.active { border-color: var(--cool); color: var(--fg); background: color-mix(in srgb, var(--cool) 12%, var(--panel)); }
+.steps li.active::before { color: var(--cool); }
+.steps li.done { color: var(--fg); border-color: color-mix(in srgb, var(--safe) 45%, var(--line)); }
+.steps li.done::before { content: "\2713"; color: var(--safe); }
+
+/* Dashboard */
+.dash { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
+.col { display: grid; gap: 16px; align-content: start; min-width: 0; }
+
+.readout .bignum { direction: ltr; display: flex; align-items: baseline; gap: 6px; font: 700 clamp(5rem, 10vw, 7.75rem)/.9 var(--font-display); font-variant-numeric: tabular-nums; margin-top: 10px; }
+.readout .unit { font-size: .4em; font-weight: 600; color: var(--muted); }
+.sensor-name { font: 500 .78rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 8px; }
+.gauge { direction: ltr; position: relative; padding-top: 20px; margin-top: 16px; }
+.limit-label { position: absolute; top: 0; left: 75%; transform: translateX(-50%); font: 500 .68rem var(--font-mono); letter-spacing: .06em; color: var(--warn); white-space: nowrap; }
+.track { position: relative; height: 14px; }
+.fill { position: absolute; inset: 0; border-radius: 7px; overflow: hidden; background: linear-gradient(90deg, var(--safe) 0%, var(--safe) 20%, #ffd23a 50%, var(--heat) 70%, var(--warn) 82%, var(--warn) 100%); }
+.mask { position: absolute; top: 0; bottom: 0; right: 0; background: var(--panel-2); opacity: .88; }
+.limit { position: absolute; left: 75%; top: -5px; bottom: -5px; width: 2px; background: var(--warn); }
+.ptr { position: absolute; top: -9px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid var(--fg); transform: translateX(-50%); }
+.ticks { position: relative; height: 18px; margin-top: 8px; font: 400 .7rem var(--font-mono); color: var(--muted); }
+.ticks span { position: absolute; transform: translateX(-50%); }
+
+.status { transition: border-color .3s, background .3s; }
+.status[data-state="safe"] { --sc: var(--safe); }
+.status[data-state="warning"] { --sc: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, var(--panel)); }
+.status-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.sdot { width: 16px; height: 16px; border-radius: 50%; background: var(--sc); box-shadow: 0 0 14px var(--sc); flex: none; }
+.sword { font: 700 clamp(2.2rem, 4vw, 3rem)/1 var(--font-display); letter-spacing: .05em; color: var(--sc); }
+.smsg { margin-top: 8px; font-size: 1.02rem; }
+.ssub { margin-top: 4px; color: var(--muted); font-size: .9rem; min-height: 2.9em; }
+.pillslot { min-height: 34px; display: flex; align-items: center; }
+.coolpill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 13px; border-radius: 999px; border: 1px solid var(--cool); color: var(--cool); background: color-mix(in srgb, var(--cool) 16%, var(--panel)); font: 600 .82rem var(--font-mono); letter-spacing: .1em; }
+.coolpill i { width: 8px; height: 8px; border-radius: 50%; background: var(--cool); animation: blink .9s ease-in-out infinite; }
+
+/* Tire stage */
+.stage { position: relative; display: flex; flex-direction: column; padding: 12px 12px 14px; }
+.stage-art { flex: 1; display: grid; place-items: center; position: relative; }
+.stage svg { width: 100%; height: auto; display: block; max-width: 100%; direction: ltr; }
+.stage-cap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 6px 0; font: 400 .72rem var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.stage-badge { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); }
+.spin { transform-origin: 270px 215px; animation: spin 16s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spray { opacity: 0; transition: opacity .3s; }
+.stage.spraying .spray { opacity: 1; }
+.mist { opacity: 0; transition: opacity .5s; }
+.stage.spraying .mist { opacity: 1; animation: mist 1.2s ease-in-out infinite; }
+@keyframes mist { 50% { opacity: .65; } }
+.drop { fill: #c4efff; opacity: 0; animation: shoot var(--t, 1s) linear infinite; animation-delay: var(--dl, 0s); }
+@keyframes shoot {
+  0% { transform: translate(0, 0) scale(.5); opacity: 0; }
+  12% { opacity: .95; }
+  85% { opacity: .8; }
+  100% { transform: translate(var(--dx), var(--dy)) scale(1.2); opacity: 0; }
+}
+.ping-ring { fill: none; stroke: var(--cool); stroke-width: 2; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.ping-ring.go { animation: ping .9s ease-out; }
+@keyframes ping { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(3.4); } }
+
+/* LEDs */
+.leds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.led-item { display: grid; justify-items: center; gap: 10px; text-align: center; padding: 6px 0 2px; }
+.led { --c: var(--safe); width: 46px; height: 46px; border-radius: 50%; background: radial-gradient(circle at 36% 30%, rgba(255,255,255,.18), transparent 42%), color-mix(in srgb, var(--c) 20%, #0a0e12); box-shadow: inset 0 -5px 9px rgba(0,0,0,.55), 0 0 0 5px #0a0e12, 0 0 0 6px var(--line); transition: background .25s, box-shadow .25s; }
+.led.on { background: radial-gradient(circle at 36% 30%, rgba(255,255,255,.85), transparent 36%), var(--c); box-shadow: inset 0 -5px 9px rgba(0,0,0,.25), 0 0 0 5px #0a0e12, 0 0 0 6px var(--line), 0 0 20px var(--c), 0 0 46px color-mix(in srgb, var(--c) 55%, transparent); }
+.led-name { font: 600 .74rem var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); transition: color .25s; }
+.led-item.on .led-name { color: var(--fg); }
+.led-sub { font-size: .72rem; color: var(--muted); margin-top: -6px; }
+
+/* Sensor panel */
+.sp { margin: 12px 0 0; display: grid; }
+.sp > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.sp > div:last-child { border-bottom: 0; padding-bottom: 0; }
+.sp dt { color: var(--muted); font-size: .88rem; }
+.sp dd { margin: 0; font: 500 .9rem var(--font-mono); font-variant-numeric: tabular-nums; text-align: end; }
+.tag { display: inline-block; min-width: 3.2em; text-align: center; padding: 2px 9px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); font: 600 .8rem var(--font-mono); letter-spacing: .08em; transition: background .2s, color .2s, border-color .2s; }
+.tag.on { background: var(--cool); border-color: var(--cool); color: #04202b; }
+
+/* Flow */
+.sec-title { font: 700 1.6rem/1.1 var(--font-display); letter-spacing: .03em; text-transform: uppercase; }
+.sec-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; margin-bottom: 14px; }
+.legend { display: flex; gap: 16px; font: 400 .72rem var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.legend i { display: inline-block; width: 18px; height: 3px; margin-inline-end: 6px; vertical-align: middle; border-radius: 2px; }
+.lane { display: flex; align-items: stretch; margin-top: 10px; }
+.lane-name { margin-top: 14px; }
+.node { --c: var(--heat); flex: 1 1 0; min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); padding: 12px 12px 12px; display: grid; gap: 3px; align-content: start; transition: border-color .3s, box-shadow .3s; }
+.node.water { --c: var(--cool); }
+.node .role { font: 500 .66rem var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.node strong { font: 600 1.05rem/1.2 var(--font-body); }
+.node .nstate { font: 500 .78rem var(--font-mono); color: var(--muted); margin-top: 4px; transition: color .3s; }
+.node.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c), 0 0 24px color-mix(in srgb, var(--c) 38%, transparent); }
+.node.on .nstate { color: var(--c); }
+.link { --c: var(--heat); flex: 0 0 38px; align-self: center; position: relative; height: 2px; background: var(--line); transition: background .3s; }
+.link.water { --c: var(--cool); }
+.link::after { content: ""; position: absolute; right: -1px; top: -4px; border-left: 7px solid var(--line); border-top: 5px solid transparent; border-bottom: 5px solid transparent; transition: border-color .3s; }
+.link.active { background: repeating-linear-gradient(90deg, var(--c) 0 8px, transparent 8px 14px); background-size: 14px 2px; animation: dash .5s linear infinite; }
+.link.active::after { border-left-color: var(--c); }
+@keyframes dash { to { background-position: 14px 0; } }
+.link small { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font: 400 .62rem var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+
+/* Log + stats */
+.lower { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; }
+.log { list-style: none; margin: 12px 0 0; padding: 0; height: 292px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.log li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: 7px 12px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); animation: in .35s ease-out; font-size: .88rem; }
+.log time { font: 400 .8rem var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.log .k-info { color: var(--fg); }
+.log .k-heat { color: var(--heat); }
+.log .k-warn { color: var(--warn); font-weight: 600; }
+.log .k-cool { color: var(--cool); }
+.log .k-safe { color: var(--safe); font-weight: 600; }
+@keyframes in { from { opacity: 0; transform: translateY(4px); } }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.stat { border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; background: var(--panel-2); min-width: 0; }
+.stat .lbl { font-size: .64rem; }
+.stat b { display: block; margin-top: 6px; font: 700 1.9rem/1 var(--font-display); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.stat b.small { font-size: 1.35rem; padding-top: .35rem; }
+.stat.set b { color: var(--safe); }
+.statnote { margin-top: 12px; font-size: .84rem; color: var(--muted); }
+
+/* Explanation */
+.how { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px 36px; }
+.how p { max-width: 65ch; color: #c6d0da; }
+.how p + p { margin-top: 12px; }
+.how .chain { margin-top: 14px; font: 500 .85rem/1.7 var(--font-mono); color: var(--fg); }
+.how .chain em { font-style: normal; color: var(--cool); }
+.substitute { border: 1px solid color-mix(in srgb, var(--cool) 55%, var(--line)); background: color-mix(in srgb, var(--cool) 8%, var(--panel)); border-radius: 6px; padding: 14px 16px; margin-top: 14px; font-weight: 600; color: var(--fg); max-width: 65ch; }
+.hw { list-style: none; margin: 12px 0 0; padding: 0; display: grid; }
+.hw li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: .9rem; }
+.hw li span:first-child { font: 500 .78rem var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.hw li span:last-child { text-align: end; }
+.disclaimer { border: 1px solid color-mix(in srgb, var(--heat) 60%, var(--line)); border-radius: 6px; padding: 16px 18px; display: grid; gap: 6px; }
+.disclaimer .lbl { color: var(--heat); }
+.disclaimer p { max-width: 80ch; color: #c6d0da; }
+
+/* Language toggle and Arabic / right-to-left adjustments */
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.langbtn { min-height: 36px; padding: .35rem .95rem; border-radius: 999px; font-size: .95rem; color: var(--fg); }
+@keyframes dashr { to { background-position: -14px 0; } }
+@media (min-width: 721px) {
+  [dir="rtl"] .link::after { right: auto; left: -1px; border-left: 0; border-right: 7px solid var(--line); }
+  [dir="rtl"] .link.active { animation-name: dashr; }
+  [dir="rtl"] .link.active::after { border-right-color: var(--c); }
+}
+[lang="ar"] *, [lang="ar"] *::before, [lang="ar"] *::after { letter-spacing: 0 !important; text-transform: none !important; }
+[lang="ar"] h1 { line-height: 1.3; }
+[lang="ar"] .sec-title, [lang="ar"] .sword, [lang="ar"] .stat b { line-height: 1.4; }
+[lang="ar"] .lbl, [lang="ar"] .eyebrow, [lang="ar"] .simchip, [lang="ar"] .stage-cap, [lang="ar"] .legend,
+[lang="ar"] .led-name, [lang="ar"] .node .role, [lang="ar"] .node .nstate, [lang="ar"] .limit-label,
+[lang="ar"] .statnote, [lang="ar"] .hw li span:first-child, [lang="ar"] .sensor-name, [lang="ar"] .link small { font-size: .86rem; }
+[lang="ar"] .stat .lbl { font-size: .8rem; }
+[lang="ar"] .lbl-svg { font-size: 13px; }
+
+@media (max-width: 960px) {
+  .dash { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage { grid-column: 1 / -1; order: -1; }
+  .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lower, .how { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .lane { flex-direction: column; }
+  .link { flex: 0 0 34px; width: 2px; height: auto; align-self: center; }
+  .link::after { right: auto; left: -4px; top: auto; bottom: -1px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--line); border-bottom: 0; }
+  .link.active { background: repeating-linear-gradient(180deg, var(--c) 0 8px, transparent 8px 14px); background-size: 2px 14px; animation-name: dashv; }
+  .link.active::after { border-top-color: var(--c); border-left-color: transparent; }
+  .link small { top: 50%; left: auto; inset-inline-start: 14px; transform: translateY(-50%); }
+  @keyframes dashv { to { background-position: 0 14px; } }
+}
+@media (max-width: 640px) {
+  .dash { grid-template-columns: minmax(0, 1fr); }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .btn.primary { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; }
+  .spin { animation: none !important; }
+}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <p class="eyebrow">School engineering project</p>
+      <h1>Smart Tire Cooling System</h1>
+      <p class="tagline">A smart cooling system that prevents truck tire blowouts before they happen.</p>
+    </div>
+    <div class="tools">
+      <div class="simchip"><i></i>Simulation &middot; no hardware connected</div>
+      <button class="btn ghost langbtn" id="btnLang" type="button" lang="ar">العربية</button>
+    </div>
+  </header>
+
+  <section class="panel controls" aria-label="Simulation controls">
+    <div class="btns">
+      <button class="btn primary" id="btnDemo" type="button">&#9654; Start Full Demonstration</button>
+      <button class="btn heat" id="btnHeat" type="button">&#128293; Heat Tire</button>
+      <button class="btn ghost" id="btnReset" type="button">Reset</button>
+    </div>
+    <ol class="steps" id="steps" aria-label="Demonstration sequence">
+      <li><b>Normal</b><span>52&deg;C, SAFE</span></li>
+      <li><b>Heating</b><span>Sensor reads rising heat</span></li>
+      <li><b>Limit reached</b><span>70&deg;C, WARNING</span></li>
+      <li><b>Valve opens</b><span>3 s cold-water spray</span></li>
+      <li><b>Cooling down</b><span>58&deg;C to 52&deg;C</span></li>
+      <li><b>Back to SAFE</b><span>Green LED on</span></li>
+    </ol>
+  </section>
+
+  <main class="dash">
+    <div class="col">
+      <section class="panel readout" aria-label="Temperature">
+        <h2 class="lbl">Tire temperature</h2>
+        <div class="bignum"><span id="num">52</span><span class="unit">&deg;C</span></div>
+        <p class="sensor-name">DS18B20 Temperature Sensor</p>
+        <div class="gauge">
+          <span class="limit-label">70&deg;C LIMIT</span>
+          <div class="track">
+            <div class="fill"><div class="mask" id="mask"></div></div>
+            <div class="limit"></div>
+            <div class="ptr" id="ptr"></div>
+          </div>
+          <div class="ticks"><span style="left:0%">40</span><span style="left:25%">50</span><span style="left:50%">60</span><span style="left:75%">70</span><span style="left:100%">80</span></div>
+        </div>
+      </section>
+
+      <section class="panel status" id="status" data-state="safe" aria-live="polite">
+        <h2 class="lbl">System status</h2>
+        <div class="status-row"><span class="sdot"></span><span class="sword" id="sword">SAFE</span></div>
+        <p class="smsg" id="smsg">Temperature is within the safe range.</p>
+        <p class="ssub" id="ssub"></p>
+        <div class="pillslot"><span class="coolpill" id="coolpill" hidden><i></i>COOLING ACTIVE</span></div>
+      </section>
+    </div>
+
+    <section class="panel stage" id="stage" aria-label="Truck tire with cooling spray">
+      <div class="stage-art">
+        <svg viewBox="0 0 480 430" role="img" aria-label="Truck tire with a spray nozzle and temperature sensor">
+          <defs>
+            <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+              <stop offset="55%" style="stop-color:var(--hc, #34e0a1);stop-opacity:.55"/>
+              <stop offset="100%" style="stop-color:var(--hc, #34e0a1);stop-opacity:0"/>
+            </radialGradient>
+            <radialGradient id="wash" cx="50%" cy="50%" r="50%">
+              <stop offset="55%" style="stop-color:var(--hc, #34e0a1);stop-opacity:0"/>
+              <stop offset="100%" style="stop-color:var(--hc, #34e0a1);stop-opacity:.55"/>
+            </radialGradient>
+            <radialGradient id="rim" cx="40%" cy="35%" r="75%">
+              <stop offset="0%" stop-color="#8795a2"/>
+              <stop offset="55%" stop-color="#4b5762"/>
+              <stop offset="100%" stop-color="#2a323a"/>
+            </radialGradient>
+            <radialGradient id="mistg" cx="50%" cy="50%" r="50%">
+              <stop offset="40%" stop-color="#2cc8ff" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#2cc8ff" stop-opacity=".38"/>
+            </radialGradient>
+            <linearGradient id="cone" gradientUnits="userSpaceOnUse" x1="10" y1="0" x2="330" y2="0">
+              <stop offset="0%" stop-color="#2cc8ff" stop-opacity=".4"/>
+              <stop offset="100%" stop-color="#2cc8ff" stop-opacity="0"/>
+            </linearGradient>
+            <path id="arc" d="M 152,215 A 118,118 0 0 1 388,215" fill="none"/>
+          </defs>
+
+          <circle id="glowc" cx="270" cy="215" r="208" fill="url(#glow)" style="opacity:0"/>
+
+          <circle cx="270" cy="215" r="170" fill="#090b0e" stroke="#222a32" stroke-width="2"/>
+          <g class="spin">
+            <circle cx="270" cy="215" r="160" fill="none" stroke="#2b343d" stroke-width="20" stroke-dasharray="13 7.94"/>
+          </g>
+          <circle cx="270" cy="215" r="150" fill="none" stroke="#0d1115" stroke-width="3"/>
+          <circle cx="270" cy="215" r="141" fill="#11161b" stroke="#222a32" stroke-width="2"/>
+          <circle id="washc" cx="270" cy="215" r="141" fill="url(#wash)" style="opacity:0"/>
+          <circle id="ringc" cx="270" cy="215" r="147" fill="none" stroke-width="3" style="stroke:var(--hc, #34e0a1);opacity:0"/>
+          <text font-family="IBM Plex Mono, monospace" font-size="11" letter-spacing="2.4" fill="#5b6773" text-anchor="middle"><textPath href="#arc" startOffset="50%">315/80 R22.5 &#183; STEEL RADIAL &#183; TUBELESS</textPath></text>
+
+          <circle cx="270" cy="215" r="86" fill="url(#rim)" stroke="#3a444e" stroke-width="2"/>
+          <circle cx="270" cy="215" r="72" fill="#0d1115" stroke="#2b343c" stroke-width="2"/>
+          <g class="spin">
+            <g fill="#06080a" stroke="#2f3943" stroke-width="2">
+              <circle cx="322" cy="215" r="9"/><circle cx="312" cy="246" r="9"/><circle cx="287" cy="265" r="9"/><circle cx="253" cy="265" r="9"/><circle cx="228" cy="246" r="9"/><circle cx="218" cy="215" r="9"/><circle cx="228" cy="184" r="9"/><circle cx="253" cy="165" r="9"/><circle cx="287" cy="165" r="9"/><circle cx="312" cy="184" r="9"/>
+            </g>
+            <circle cx="270" cy="215" r="30" fill="#2a323a" stroke="#56626d" stroke-width="2"/>
+            <g fill="#7d8a96">
+              <circle cx="292" cy="215" r="4"/><circle cx="287" cy="231" r="4"/><circle cx="270" cy="237" r="4"/><circle cx="253" cy="231" r="4"/><circle cx="248" cy="215" r="4"/><circle cx="253" cy="199" r="4"/><circle cx="270" cy="193" r="4"/><circle cx="287" cy="199" r="4"/>
+            </g>
+          </g>
+          <circle cx="270" cy="215" r="13" fill="#161c22" stroke="#56626d" stroke-width="2"/>
+
+          <circle class="mist" cx="270" cy="215" r="170" fill="url(#mistg)"/>
+
+          <!-- DS18B20 probe -->
+          <line x1="350" y1="119" x2="428" y2="46" stroke="#56626d" stroke-width="1.5"/>
+          <circle cx="350" cy="119" r="7" fill="#0b0f13" stroke="#2cc8ff" stroke-width="2.5"/>
+          <circle cx="350" cy="119" r="3" fill="#2cc8ff"/>
+          <circle class="ping-ring" id="ping" cx="350" cy="119" r="7"/>
+          <text x="474" y="30" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="12" fill="#e8edf2" letter-spacing="1">DS18B20</text>
+          <text class="lbl-svg" x="474" y="45" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10" fill="#8d9aa7" letter-spacing="1">SIDEWALL PROBE</text>
+
+          <!-- Nozzle and spray -->
+          <path d="M 0,34 C 24,34 34,52 40,76" fill="none" stroke="#2b343c" stroke-width="7" stroke-linecap="round"/>
+          <g transform="translate(58 74) rotate(34)">
+            <g class="spray">
+              <polygon points="10,0 330,-100 330,100" fill="url(#cone)"/>
+              <g id="drops"></g>
+            </g>
+            <rect x="-34" y="-9" width="34" height="18" rx="3" fill="#3a444e" stroke="#56626d" stroke-width="1.5"/>
+            <path d="M 0,-8 L 11,-4 L 11,4 L 0,8 Z" fill="#6a7681"/>
+          </g>
+          <text class="lbl-svg" x="10" y="150" font-family="IBM Plex Mono, monospace" font-size="10" fill="#8d9aa7" letter-spacing="1">SPRAY NOZZLE</text>
+        </svg>
+        <span class="coolpill stage-badge" id="stageBadge" hidden><i></i>COOLING ACTIVE</span>
+      </div>
+      <div class="stage-cap"><span>Tire 1 &middot; Drive axle</span><span>Simulated reading</span></div>
+    </section>
+
+    <div class="col">
+      <section class="panel" aria-label="Indicator LEDs">
+        <h2 class="lbl">Indicator LEDs</h2>
+        <div class="leds">
+          <div class="led-item" id="liSafe"><span class="led" id="ledSafe" style="--c:var(--safe)"></span><span class="led-name">Safe</span><span class="led-sub">Green LED</span></div>
+          <div class="led-item" id="liWarn"><span class="led" id="ledWarn" style="--c:var(--warn)"></span><span class="led-name">Warning</span><span class="led-sub">Red LED</span></div>
+          <div class="led-item" id="liCool"><span class="led" id="ledCool" style="--c:var(--cool)"></span><span class="led-name">Cooling</span><span class="led-sub">Blue LED</span></div>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Sensor panel">
+        <h2 class="lbl">Sensor panel</h2>
+        <dl class="sp">
+          <div><dt>Sensor</dt><dd>DS18B20</dd></div>
+          <div><dt>Temperature</dt><dd id="spTemp">52&deg;C</dd></div>
+          <div><dt>Reading interval</dt><dd>1 second</dd></div>
+          <div><dt>Threshold</dt><dd>70&deg;C</dd></div>
+          <div><dt>Valve</dt><dd><span class="tag" id="spValve">OFF</span></dd></div>
+          <div><dt>Relay</dt><dd><span class="tag" id="spRelay">OFF</span></dd></div>
+        </dl>
+      </section>
+    </div>
+  </main>
+
+  <section class="panel" aria-label="Hardware flow">
+    <div class="sec-head">
+      <h2 class="sec-title">Inside the prototype</h2>
+      <div class="legend"><span><i style="background:var(--heat)"></i>Electrical signal</span><span><i style="background:var(--cool)"></i>Water</span></div>
+    </div>
+    <p class="lbl lane-name">Control chain</p>
+    <div class="lane">
+      <div class="node" id="nSensor"><span class="role">Input</span><strong>DS18B20 Sensor</strong><span class="nstate" id="tSensor">Reading 52&deg;C</span></div>
+      <div class="link active" id="lk1"></div>
+      <div class="node" id="nArduino"><span class="role">Controller</span><strong>Arduino Nano</strong><span class="nstate" id="tArduino">Monitoring</span></div>
+      <div class="link" id="lk2"></div>
+      <div class="node" id="nRelay"><span class="role">Switch</span><strong>5V Relay</strong><span class="nstate" id="tRelay">OFF</span></div>
+      <div class="link" id="lk3"></div>
+      <div class="node" id="nValve"><span class="role">Water control</span><strong>Electric Valve</strong><span class="nstate" id="tValve">CLOSED</span></div>
+      <div class="link" id="lk4"></div>
+      <div class="node" id="nSpray"><span class="role">Output</span><strong>Cooling Spray</strong><span class="nstate" id="tSpray">Idle</span></div>
+    </div>
+    <p class="lbl lane-name">Water path</p>
+    <div class="lane">
+      <div class="node water" id="nTank"><span class="role">Supply</span><strong>Cold Water Tank</strong><span class="nstate" id="tTank">Ready</span></div>
+      <div class="link water" id="wl1"><small>via valve</small></div>
+      <div class="node water" id="nNozzle"><span class="role">Delivery</span><strong>Spray Nozzle</strong><span class="nstate" id="tNozzle">Idle</span></div>
+      <div class="link water" id="wl2"></div>
+      <div class="node water" id="nTire"><span class="role">Target</span><strong>Tire</strong><span class="nstate" id="tTire">52&deg;C</span></div>
+    </div>
+  </section>
+
+  <div class="lower">
+    <section class="panel" aria-label="Event log">
+      <h2 class="sec-title">Event log</h2>
+      <ul class="log" id="log" role="log" aria-live="off"></ul>
+    </section>
+    <section class="panel" aria-label="Results">
+      <h2 class="sec-title">Results</h2>
+      <div class="stats" id="stats">
+        <div class="stat"><span class="lbl">Maximum temperature</span><b id="stMax">&mdash;</b></div>
+        <div class="stat set"><span class="lbl">Cooling start</span><b>70&deg;C</b></div>
+        <div class="stat"><span class="lbl">Final temperature</span><b id="stFinal">&mdash;</b></div>
+        <div class="stat"><span class="lbl">Temperature reduction</span><b id="stRed">&mdash;</b></div>
+        <div class="stat set"><span class="lbl">Cooling duration</span><b class="small">3 seconds spray</b></div>
+        <div class="stat set"><span class="lbl">System response</span><b class="small">Automatic</b></div>
+      </div>
+      <p class="statnote" id="statNote">Maximum, final and reduction fill in when a run finishes.</p>
+    </section>
+  </div>
+
+  <section class="panel how" aria-label="How it works">
+    <div>
+      <h2 class="sec-title">How does it work?</h2>
+      <p style="margin-top:14px">Truck tires can become extremely hot during heavy loads, long-distance driving, and high ambient temperatures. Excessive heat can increase the risk of tire failure.</p>
+      <p>The DS18B20 measures tire temperature continuously. When the temperature reaches the predefined warning threshold, the Arduino activates a relay that controls an electric valve and starts the cooling process.</p>
+      <p class="chain">Temperature rises &rarr; sensor detects danger &rarr; Arduino reacts &rarr; valve activates &rarr; cooling starts &rarr; <em>temperature drops</em> &rarr; system returns to SAFE.</p>
+      <p class="substitute">The school prototype uses cold water as a safe demonstration substitute for the proposed cooling medium.</p>
+    </div>
+    <div>
+      <h3 class="lbl">Physical build</h3>
+      <ul class="hw">
+        <li><span>Sensor</span><span>DS18B20 temperature sensor</span></li>
+        <li><span>Controller</span><span>Arduino Nano</span></li>
+        <li><span>Switch</span><span>5V relay</span></li>
+        <li><span>Actuator</span><span>Electric valve</span></li>
+        <li><span>Supply</span><span>Cold-water tank</span></li>
+        <li><span>Delivery</span><span>Spray nozzle</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="disclaimer" aria-label="Prototype disclaimer">
+    <h2 class="lbl">Prototype disclaimer</h2>
+    <p>This is an educational engineering prototype. The cooling behavior and temperature values shown in the interface are simulated for demonstration purposes and do not represent a certified real-world truck tire safety system.</p>
+  </section>
+</div>
+
+<script>
+(function () {
+  var BASE = 52, THRESH = 70;
+  var HEAT = [53, 55, 58, 61, 64, 66, 68, 69, 70];
+  var SPRAY = [72, 65, 58];
+  var RECOVER = [57, 57, 56, 56, 55, 54, 54, 53, 53, 52];
+
+  /* Text that the script writes while running */
+  var D = {
+    en: {
+      safe: 'SAFE', warning: 'WARNING',
+      msgSafe: 'Temperature is within the safe range.', msgWarn: 'High tire temperature detected!',
+      subHeat: 'Tire is heating up. Still below the 70°C limit.',
+      subAlarm: 'Arduino is switching on the relay.',
+      subSpray: 'Cold water is spraying on the tire.',
+      subRecover: 'Valve closed. Waiting for the tire to cool to 52°C.',
+      subDone: 'Cooling complete. System is back to normal.',
+      on: 'ON', off: 'OFF', open: 'OPEN', closed: 'CLOSED',
+      spraying: 'Spraying', idle: 'Idle', ready: 'Ready', supplying: 'Supplying water',
+      monitoring: 'Monitoring', threshold: 'Threshold reached', relaySent: 'Relay signal sent', waiting: 'Waiting to recover',
+      reading: 'Reading {v}', tireCooling: '{v}, cooling',
+      btnRun: 'Simulation running…', btnDemo: '▶ Start Full Demonstration',
+      lReady: 'System ready. Temperature: {v}, status SAFE', lDemo: 'Demonstration started', lHeat: 'Heating started',
+      lTemp: 'Temperature: {v}', lReached: 'Temperature reached {v}', lWarn: 'WARNING triggered',
+      lRelay: 'Relay activated', lValveOn: 'Cooling valve ON', lValveOff: 'Cooling valve OFF', lSafe: 'System returned to SAFE',
+      noteWait: 'Maximum, final and reduction fill in when a run finishes.',
+      noteDone: 'Run complete. The system responded automatically, with no manual input after the heat started.',
+      langBtn: 'العربية'
+    },
+    ar: {
+      safe: 'آمن', warning: 'تحذير',
+      msgSafe: 'درجة الحرارة ضمن المدى الآمن.',
+      msgWarn: 'تم رصد ارتفاع في حرارة الإطار!',
+      subHeat: 'الإطار يسخن. ما زال أقل من حد ⁦' + 70 + '°C⁩.',
+      subAlarm: 'الأردوينو يشغّل الريليه.',
+      subSpray: 'الماء البارد يُرش على الإطار.',
+      subRecover: 'أُغلق الصمام. ننتظر تبريد الإطار إلى ⁦52°C⁩.',
+      subDone: 'اكتمل التبريد. عاد النظام إلى وضعه الطبيعي.',
+      on: 'يعمل', off: 'متوقف', open: 'مفتوح', closed: 'مغلق',
+      spraying: 'يرش', idle: 'خامل', ready: 'جاهز', supplying: 'يمدّ بالماء',
+      monitoring: 'مراقبة', threshold: 'تم بلوغ الحد',
+      relaySent: 'تم إرسال إشارة للريليه', waiting: 'بانتظار التعافي',
+      reading: 'القراءة {v}', tireCooling: '{v}، يبرد',
+      btnRun: 'المحاكاة قيد التشغيل…', btnDemo: '▶ ابدأ العرض الكامل',
+      lReady: 'النظام جاهز. درجة الحرارة: {v}، الحالة: آمن',
+      lDemo: 'بدأ العرض', lHeat: 'بدأ التسخين',
+      lTemp: 'درجة الحرارة: {v}', lReached: 'وصلت الحرارة إلى {v}',
+      lWarn: 'تم تفعيل التحذير', lRelay: 'تم تشغيل الريليه',
+      lValveOn: 'صمام التبريد يعمل', lValveOff: 'صمام التبريد متوقف',
+      lSafe: 'عاد النظام إلى الوضع الآمن',
+      noteWait: 'تظهر القيمة العليا والنهائية والانخفاض عند انتهاء التشغيل.',
+      noteDone: 'اكتمل التشغيل. استجاب النظام تلقائيًا دون أي تدخل يدوي بعد بدء التسخين.',
+      langBtn: 'English'
+    }
+  };
+
+  /* Text written in the HTML, keyed by its English wording */
+  var STATIC_AR = {
+    'School engineering project': 'مشروع هندسي مدرسي',
+    'Smart Tire Cooling System': 'نظام تبريد الإطارات الذكي',
+    'A smart cooling system that prevents truck tire blowouts before they happen.': 'نظام تبريد ذكي يمنع انفجار إطارات الشاحنات قبل أن يحدث.',
+    'Simulation · no hardware connected': 'محاكاة · لا توجد أجهزة متصلة',
+    '🔥 Heat Tire': '🔥 تسخين الإطار',
+    'Reset': 'إعادة ضبط',
+    'Normal': 'طبيعي', '52°C, SAFE': '⁦52°C⁩، آمن',
+    'Heating': 'التسخين', 'Sensor reads rising heat': 'الحساس يقرأ ارتفاع الحرارة',
+    'Limit reached': 'بلوغ الحد', '70°C, WARNING': '⁦70°C⁩، تحذير',
+    'Valve opens': 'فتح الصمام', '3 s cold-water spray': 'رش ماء بارد لمدة 3 ثوانٍ',
+    'Cooling down': 'التبريد التدريجي', '58°C to 52°C': 'من ⁦58°C⁩ إلى ⁦52°C⁩',
+    'Back to SAFE': 'العودة إلى الوضع الآمن', 'Green LED on': 'الضوء الأخضر يعمل',
+    'Tire temperature': 'درجة حرارة الإطار', '70°C LIMIT': 'الحد ⁦70°C⁩',
+    'DS18B20 Temperature Sensor': 'حساس الحرارة DS18B20',
+    'System status': 'حالة النظام', 'COOLING ACTIVE': 'التبريد يعمل',
+    'Tire 1 · Drive axle': 'الإطار 1 · محور الدفع', 'Simulated reading': 'قراءة محاكاة',
+    'Indicator LEDs': 'مؤشرات LED', 'Safe': 'آمن', 'Green LED': 'LED أخضر', 'Warning': 'تحذير', 'Red LED': 'LED أحمر',
+    'Cooling': 'تبريد', 'Blue LED': 'LED أزرق',
+    'Sensor panel': 'لوحة الحساس', 'Sensor': 'الحساس', 'Temperature': 'درجة الحرارة', 'Reading interval': 'فترة القراءة',
+    '1 second': 'ثانية واحدة', 'Threshold': 'الحد', 'Valve': 'الصمام', 'Relay': 'الريليه',
+    'Inside the prototype': 'داخل النموذج', 'Electrical signal': 'إشارة كهربائية', 'Water': 'ماء',
+    'Control chain': 'سلسلة التحكم', 'Water path': 'مسار الماء',
+    'Input': 'مدخل', 'Controller': 'المتحكم', 'Switch': 'مفتاح', 'Water control': 'التحكم بالماء', 'Output': 'مخرج',
+    'Supply': 'إمداد', 'Delivery': 'توصيل', 'Target': 'الهدف',
+    'DS18B20 Sensor': 'حساس DS18B20', '5V Relay': 'ريليه 5 فولت', 'Electric Valve': 'صمام كهربائي',
+    'Cooling Spray': 'رشاش التبريد', 'Cold Water Tank': 'خزان الماء البارد', 'Spray Nozzle': 'فوهة الرش',
+    'Tire': 'الإطار', 'via valve': 'عبر الصمام',
+    'Event log': 'سجل الأحداث', 'Results': 'النتائج',
+    'Maximum temperature': 'أعلى درجة حرارة', 'Cooling start': 'بداية التبريد', 'Final temperature': 'الدرجة النهائية',
+    'Temperature reduction': 'الانخفاض في الحرارة', 'Cooling duration': 'مدة التبريد', '3 seconds spray': 'رش لمدة 3 ثوانٍ',
+    'System response': 'استجابة النظام', 'Automatic': 'تلقائية',
+    'How does it work?': 'كيف يعمل النظام؟',
+    'Truck tires can become extremely hot during heavy loads, long-distance driving, and high ambient temperatures. Excessive heat can increase the risk of tire failure.':
+      'قد ترتفع حرارة إطارات الشاحنات كثيرًا أثناء الأحمال الثقيلة والقيادة لمسافات طويلة وارتفاع حرارة الجو. والحرارة الزائدة قد تزيد من خطر تلف الإطار.',
+    'The DS18B20 measures tire temperature continuously. When the temperature reaches the predefined warning threshold, the Arduino activates a relay that controls an electric valve and starts the cooling process.':
+      'يقيس حساس DS18B20 درجة حرارة الإطار باستمرار. وعندما تصل الحرارة إلى حد التحذير المحدد مسبقًا، يشغّل الأردوينو ريليه يتحكم في صمام كهربائي فتبدأ عملية التبريد.',
+    'Temperature rises → sensor detects danger → Arduino reacts → valve activates → cooling starts →':
+      'ترتفع الحرارة ← الحساس يكتشف الخطر ← الأردوينو يتفاعل ← الصمام يعمل ← يبدأ التبريد ←',
+    'temperature drops': 'تنخفض الحرارة',
+    '→ system returns to SAFE.': '← يعود النظام إلى الوضع الآمن.',
+    'The school prototype uses cold water as a safe demonstration substitute for the proposed cooling medium.':
+      'يستخدم النموذج المدرسي الماء البارد كبديل آمن للعرض بدلًا من وسيط التبريد المقترح.',
+    'Physical build': 'المكوّنات الفعلية',
+    'DS18B20 temperature sensor': 'حساس حرارة DS18B20', '5V relay': 'ريليه 5 فولت',
+    'Actuator': 'المشغّل', 'Electric valve': 'صمام كهربائي', 'Cold-water tank': 'خزان ماء بارد', 'Spray nozzle': 'فوهة رش',
+    'Prototype disclaimer': 'إخلاء مسؤولية النموذج',
+    'This is an educational engineering prototype. The cooling behavior and temperature values shown in the interface are simulated for demonstration purposes and do not represent a certified real-world truck tire safety system.':
+      'هذا نموذج هندسي تعليمي. سلوك التبريد وقيم درجات الحرارة المعروضة في الواجهة هي محاكاة لأغراض العرض فقط، ولا تمثل نظام أمان معتمدًا لإطارات الشاحنات في الواقع.',
+    'SIDEWALL PROBE': 'حساس جدار الإطار',
+    'SPRAY NOZZLE': 'فوهة الرش'
+  };
+
+  var lang = 'en';
+  function T(v) { return '⁦' + v + '°C⁩'; }
+  function t(k, v) {
+    var s = D[lang][k];
+    if (s === undefined) s = D.en[k];
+    return v === undefined ? s : s.replace('{v}', T(v));
+  }
+
+  function $(id) { return document.getElementById(id); }
+  var el = {
+    num: $('num'), mask: $('mask'), ptr: $('ptr'),
+    status: $('status'), sword: $('sword'), smsg: $('smsg'), ssub: $('ssub'),
+    pill: $('coolpill'), badge: $('stageBadge'), stage: $('stage'),
+    ledSafe: $('ledSafe'), ledWarn: $('ledWarn'), ledCool: $('ledCool'),
+    liSafe: $('liSafe'), liWarn: $('liWarn'), liCool: $('liCool'),
+    spTemp: $('spTemp'), spValve: $('spValve'), spRelay: $('spRelay'),
+    log: $('log'), steps: $('steps').children,
+    btnDemo: $('btnDemo'), btnHeat: $('btnHeat'), btnReset: $('btnReset'), btnLang: $('btnLang'),
+    glowc: $('glowc'), washc: $('washc'), ringc: $('ringc'), ping: $('ping'),
+    stMax: $('stMax'), stFinal: $('stFinal'), stRed: $('stRed'), statNote: $('statNote')
+  };
+
+  var state = { temp: BASE, shown: BASE, phase: 'idle', running: false, max: BASE, done: false, step: 1 };
+  var logs = [];
+  var runId = 0, raf = 0, from = BASE, to = BASE, t0 = 0;
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function clamp(x, a, b) { return Math.min(b, Math.max(a, x)); }
+  function heatColor(t) {
+    var x = clamp((t - 50) / 22, 0, 1);
+    return 'hsl(' + Math.round(150 - x * 146) + ' 92% 58%)';
+  }
+
+  /* Event log: entries keep their message key so they can be re-rendered in either language */
+  function logLine(entry) {
+    var li = document.createElement('li');
+    var tm = document.createElement('time');
+    tm.textContent = entry.tm;
+    var sp = document.createElement('span');
+    sp.className = 'k-' + entry.kind;
+    sp.textContent = t(entry.key, entry.v);
+    li.appendChild(tm); li.appendChild(sp);
+    el.log.appendChild(li);
+  }
+  function log(key, kind, v) {
+    var d = new Date();
+    var entry = { tm: pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()), key: key, kind: kind || 'info', v: v };
+    logs.push(entry);
+    if (logs.length > 200) { logs.shift(); el.log.removeChild(el.log.firstChild); }
+    logLine(entry);
+    el.log.scrollTop = el.log.scrollHeight;
+  }
+  function renderLog() {
+    el.log.innerHTML = '';
+    for (var i = 0; i < logs.length; i++) logLine(logs[i]);
+    el.log.scrollTop = el.log.scrollHeight;
+  }
+
+  /* Temperature visuals (follow the tweened value) */
+  function renderTemp() {
+    var tv = state.shown, c = heatColor(tv), glow = clamp((tv - 52) / 20, 0, 1);
+    el.num.textContent = Math.round(tv);
+    el.num.style.color = c;
+    var pos = clamp((tv - 40) / 40, 0, 1) * 100;
+    el.mask.style.width = (100 - pos) + '%';
+    el.ptr.style.left = pos + '%';
+    el.stage.style.setProperty('--hc', c);
+    el.glowc.style.setProperty('--hc', c);
+    el.glowc.style.opacity = glow;
+    el.washc.style.opacity = glow * 0.9;
+    el.ringc.style.opacity = glow;
+  }
+  function tick(now) {
+    var p = clamp((now - t0) / 800, 0, 1), e = 1 - Math.pow(1 - p, 3);
+    state.shown = from + (to - from) * e;
+    renderTemp();
+    raf = p < 1 ? requestAnimationFrame(tick) : 0;
+  }
+  function setSensor(v) {
+    state.temp = v;
+    if (v > state.max) state.max = v;
+    from = state.shown; to = v; t0 = performance.now();
+    if (!raf) raf = requestAnimationFrame(tick);
+    renderState();
+    el.ping.classList.remove('go');
+    void el.ping.getBoundingClientRect();
+    el.ping.classList.add('go');
+  }
+
+  /* System state: derived from the phase */
+  function renderState() {
+    var p = state.phase;
+    var warning = p === 'alarm' || p === 'relay' || p === 'spray' || p === 'recover';
+    var relay = p === 'relay' || p === 'spray';
+    var valve = p === 'spray';
+
+    el.status.dataset.state = warning ? 'warning' : 'safe';
+    el.sword.textContent = t(warning ? 'warning' : 'safe');
+    el.smsg.textContent = t(warning ? 'msgWarn' : 'msgSafe');
+    var sub = '';
+    if (p === 'heat') sub = t('subHeat');
+    else if (p === 'alarm' || p === 'relay') sub = t('subAlarm');
+    else if (p === 'spray') sub = t('subSpray');
+    else if (p === 'recover') sub = t('subRecover');
+    else if (state.done) sub = t('subDone');
+    el.ssub.textContent = sub;
+    el.pill.hidden = !valve;
+    el.badge.hidden = !valve;
+    el.stage.classList.toggle('spraying', valve);
+
+    function led(l, li, on) { l.classList.toggle('on', on); li.classList.toggle('on', on); }
+    led(el.ledSafe, el.liSafe, !warning);
+    led(el.ledWarn, el.liWarn, warning);
+    led(el.ledCool, el.liCool, valve);
+
+    el.spTemp.textContent = T(state.temp);
+    el.spValve.textContent = t(valve ? 'on' : 'off'); el.spValve.classList.toggle('on', valve);
+    el.spRelay.textContent = t(relay ? 'on' : 'off'); el.spRelay.classList.toggle('on', relay);
+
+    function node(id, on) { $(id).classList.toggle('on', on); }
+    node('nArduino', warning); node('nRelay', relay); node('nValve', valve); node('nSpray', valve);
+    node('nTank', valve); node('nNozzle', valve); node('nTire', valve);
+    function lk(id, on) { $(id).classList.toggle('active', on); }
+    lk('lk2', relay); lk('lk3', relay); lk('lk4', valve); lk('wl1', valve); lk('wl2', valve);
+
+    $('tSensor').textContent = t('reading', state.temp);
+    $('tArduino').textContent = t(p === 'alarm' ? 'threshold' : (relay ? 'relaySent' : (p === 'recover' ? 'waiting' : 'monitoring')));
+    $('tRelay').textContent = t(relay ? 'on' : 'off');
+    $('tValve').textContent = t(valve ? 'open' : 'closed');
+    $('tSpray').textContent = t(valve ? 'spraying' : 'idle');
+    $('tTank').textContent = t(valve ? 'supplying' : 'ready');
+    $('tNozzle').textContent = t(valve ? 'spraying' : 'idle');
+    $('tTire').textContent = valve ? t('tireCooling', state.temp) : T(state.temp);
+  }
+
+  function setPhase(p) { state.phase = p; renderState(); }
+
+  function setStep(n) {
+    state.step = n;
+    for (var i = 0; i < el.steps.length; i++) {
+      var s = i + 1, li = el.steps[i];
+      var done = s < n || (s === n && state.done);
+      li.className = done ? 'done' : (s === n ? 'active' : '');
+    }
+  }
+
+  function setButtons() {
+    el.btnDemo.disabled = state.running;
+    el.btnHeat.disabled = state.running;
+    el.btnDemo.textContent = t(state.running ? 'btnRun' : 'btnDemo');
+  }
+
+  function renderStats() {
+    var d = state.done;
+    el.stMax.textContent = d ? T(state.max) : '—';
+    el.stFinal.textContent = d ? T(state.temp) : '—';
+    el.stRed.textContent = d ? T(state.max - state.temp) : '—';
+    [el.stMax, el.stFinal, el.stRed].forEach(function (b) { b.parentNode.classList.toggle('set', d); });
+    el.statNote.textContent = t(d ? 'noteDone' : 'noteWait');
+  }
+
+  function reset() {
+    runId++;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    state.temp = BASE; state.shown = BASE; state.max = BASE; state.done = false; state.running = false; state.phase = 'idle';
+    from = BASE; to = BASE;
+    logs = []; el.log.innerHTML = '';
+    renderTemp();
+    renderState();
+    renderStats();
+    setStep(1);
+    setButtons();
+    log('lReady', 'safe', BASE);
+  }
+
+  function sleep(ms, id) {
+    return new Promise(function (res) { setTimeout(function () { res(id === runId); }, ms); });
+  }
+
+  async function run(demo) {
+    if (state.running) return;
+    if (demo) reset();
+    var my = ++runId;
+    state.running = true; state.done = false;
+    state.max = state.temp;
+    renderStats();
+    setButtons();
+    if (demo) {
+      log('lDemo', 'info');
+      if (!(await sleep(1800, my))) return;
+    }
+
+    /* Heating */
+    setPhase('heat'); setStep(2);
+    log('lHeat', 'heat');
+    for (var i = 0; i < HEAT.length; i++) {
+      if (!(await sleep(1000, my))) return;
+      setSensor(HEAT[i]);
+      if (HEAT[i] >= THRESH) log('lReached', 'warn', THRESH);
+      else log('lTemp', 'heat', HEAT[i]);
+    }
+
+    /* Automatic reaction: warning, relay, valve */
+    setStep(3);
+    setPhase('alarm');
+    log('lWarn', 'warn');
+    if (!(await sleep(450, my))) return;
+    setPhase('relay');
+    log('lRelay', 'warn');
+    if (!(await sleep(450, my))) return;
+    setPhase('spray'); setStep(4);
+    log('lValveOn', 'cool');
+
+    /* 3 second spray */
+    for (var j = 0; j < SPRAY.length; j++) {
+      if (!(await sleep(1000, my))) return;
+      if (j === SPRAY.length - 1) {
+        setPhase('recover');
+        log('lValveOff', 'cool');
+      }
+      setSensor(SPRAY[j]);
+      log('lTemp', 'cool', SPRAY[j]);
+    }
+
+    /* Natural cooling */
+    setStep(5);
+    for (var k = 0; k < RECOVER.length; k++) {
+      if (!(await sleep(1000, my))) return;
+      setSensor(RECOVER[k]);
+      if (k % 2 === 1 || k === RECOVER.length - 1) log('lTemp', 'cool', RECOVER[k]);
+    }
+
+    /* Back to SAFE */
+    state.done = true; state.running = false;
+    setPhase('idle'); setStep(6);
+    log('lSafe', 'safe');
+    renderStats();
+    setButtons();
+  }
+
+  /* Language */
+  function translateStatic(toAr) {
+    var w = document.createTreeWalker(document.querySelector('.wrap'), NodeFilter.SHOW_TEXT, null);
+    var n;
+    while ((n = w.nextNode())) {
+      if (n.__en === undefined) n.__en = n.nodeValue;
+      var m = /^(\s*)([\s\S]*?)(\s*)$/.exec(n.__en);
+      if (!m[2]) continue;
+      if (!toAr) { n.nodeValue = n.__en; continue; }
+      var tr = STATIC_AR[m[2]];
+      if (tr !== undefined) n.nodeValue = m[1] + tr + m[3];
+    }
+  }
+  function applyLang(l) {
+    lang = l;
+    var root = document.documentElement;
+    root.lang = l;
+    root.dir = l === 'ar' ? 'rtl' : 'ltr';
+    translateStatic(l === 'ar');
+    el.btnLang.textContent = t('langBtn');
+    el.btnLang.lang = l === 'ar' ? 'en' : 'ar';
+    renderState();
+    renderLog();
+    renderStats();
+    setButtons();
+    try { localStorage.setItem('stcs-lang', l); } catch (e) {}
+  }
+
+  /* Spray droplets, positioned in the nozzle's own rotated space */
+  (function () {
+    var g = $('drops'), ns = 'http://www.w3.org/2000/svg';
+    for (var i = 0; i < 30; i++) {
+      var a = (Math.random() - 0.5) * 0.62, d = 150 + Math.random() * 190;
+      var c = document.createElementNS(ns, 'circle');
+      c.setAttribute('class', 'drop');
+      c.setAttribute('cx', 12); c.setAttribute('cy', 0);
+      c.setAttribute('r', (1.8 + Math.random() * 2.6).toFixed(1));
+      c.style.setProperty('--dx', (Math.cos(a) * d).toFixed(0) + 'px');
+      c.style.setProperty('--dy', (Math.sin(a) * d).toFixed(0) + 'px');
+      c.style.setProperty('--t', (0.7 + Math.random() * 0.5).toFixed(2) + 's');
+      c.style.setProperty('--dl', (-Math.random() * 1.2).toFixed(2) + 's');
+      g.appendChild(c);
+    }
+  })();
+
+  el.btnDemo.addEventListener('click', function () { run(true); });
+  el.btnHeat.addEventListener('click', function () { run(false); });
+  el.btnReset.addEventListener('click', reset);
+  el.btnLang.addEventListener('click', function () { applyLang(lang === 'ar' ? 'en' : 'ar'); });
+
+  reset();
+  var saved = null;
+  try { saved = localStorage.getItem('stcs-lang'); } catch (e) {}
+  var initial = saved || (((navigator.language || '').toLowerCase().indexOf('ar') === 0) ? 'ar' : 'en');
+  if (initial === 'ar') applyLang('ar');
+})();
+</script>
+
+</body>
+</html>
